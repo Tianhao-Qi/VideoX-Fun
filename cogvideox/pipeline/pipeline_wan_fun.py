@@ -369,6 +369,10 @@ class WanFunPipeline(DiffusionPipeline):
     @property
     def num_timesteps(self):
         return self._num_timesteps
+    
+    @property
+    def current_timestep(self):
+        return self._current_timestep
 
     @property
     def attention_kwargs(self):
@@ -432,6 +436,7 @@ class WanFunPipeline(DiffusionPipeline):
         )
         self._guidance_scale = guidance_scale
         self._attention_kwargs = attention_kwargs
+        self._current_timestep = None
         self._interrupt = False
 
         # 2. Default call parameters
@@ -501,6 +506,7 @@ class WanFunPipeline(DiffusionPipeline):
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
+                self._current_timestep = t
 
                 latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
                 if hasattr(self.scheduler, "scale_model_input"):
@@ -545,6 +551,8 @@ class WanFunPipeline(DiffusionPipeline):
                 if comfyui_progressbar:
                     pbar.update(1)
 
+        self._current_timestep = None
+        
         if output_type == "numpy":
             video = self.decode_latents(latents)
         elif not output_type == "latent":

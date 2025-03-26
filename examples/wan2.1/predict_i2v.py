@@ -24,6 +24,8 @@ from cogvideox.utils.lora_utils import merge_lora, unmerge_lora
 from cogvideox.utils.utils import (filter_kwargs, get_image_to_video_latent,
                                    save_videos_grid)
 
+from cogvideox.models.faster_cache import FasterCacheConfig, _apply_faster_cache_on_denoiser
+
 # GPU memory mode, which can be choosen in [model_full_load, model_cpu_offload, model_cpu_offload_and_qfloat8, sequential_cpu_offload].
 # model_full_load means that the entire model will be moved to the GPU.
 # 
@@ -42,16 +44,21 @@ GPU_memory_mode     = "sequential_cpu_offload"
 ulysses_degree      = 1
 ring_degree         = 1
 
-# Support TeaCache.
+# TeaCache
 enable_teacache     = True
 # Recommended to be set between 0.05 and 0.20. A larger threshold can cache more steps, speeding up the inference process, 
 # but it may cause slight differences between the generated content and the original content.
-teacache_threshold  = 0.10
+teacache_threshold  = 0.1
 # The number of steps to skip TeaCache at the beginning of the inference process, which can
 # reduce the impact of TeaCache on generated video quality.
 num_skip_start_steps = 5
 # Whether to offload TeaCache tensors to cpu to save a little bit of GPU memory.
 teacache_offload    = False
+
+# CFG Cache
+enable_cfg_cache    = True
+# The ratio of denoising timesteps which the unconditional branch computation can be skipped without a significant loss in quality.
+cfg_cache_skip_ratio = 0.7
 
 # Config and model path
 config_path         = "config/wan2.1/wan_civitai.yaml"
@@ -183,6 +190,21 @@ if coefficients is not None:
     pipeline.transformer.enable_teacache(
         coefficients, num_inference_steps, teacache_threshold, num_skip_start_steps=num_skip_start_steps, offload=teacache_offload
     )
+
+if enable_cfg_cache:
+    print(f"Enable CFG Cache with skip ratio {cfg_cache_skip_ratio}.")
+    scheduler.set_timesteps(num_inference_steps, mu=1)  # set timesteps before `pipeline.__call__`
+    timesteps = pipeline.scheduler.timesteps
+    skip_range_end = timesteps[int(len(timesteps) * cfg_cache_skip_ratio) - 1]
+    config = FasterCacheConfig(
+        current_timestep_callback=lambda: pipeline.current_timestep,
+        unconditional_batch_skip_range=5,
+        unconditional_batch_timestep_skip_range=(-1, skip_range_end),
+        tensor_format="BFCHW",
+        _unconditional_conditional_input_kwargs_identifiers=["x"]
+    )
+    # We only apply CFG Cache from FasterCache; TeaCache is better for Atention Cache.
+    _apply_faster_cache_on_denoiser(pipeline.transformer, config)
 
 generator = torch.Generator(device=device).manual_seed(seed)
 
